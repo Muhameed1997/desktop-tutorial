@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// حساب المستخدم — الدخول برقم الهاتف وكلمة المرور، ورمز التحقق (OTP) لتفعيل الرقم
+// عند التسجيل الجديد ولضبط كلمة المرور عند نسيانها
+// الدور يُحدد عند التسجيل: عميل / صاحب مطعم أو متجر / كابتن توصيل
+// التاجر والكابتن لا تُفعّل مساحتهم إلا بعد موافقة المدير على طلب الانضمام
+model User {
+  id            String       @id @default(cuid())
+  name          String
+  email         String?      @unique
+  phone         String?      @unique
+  passwordHash  String? // كلمة مرور الحساب مشفّرة (scrypt) — تُنشأ عند التسجيل أو تُضبط عبر «نسيت كلمة المرور»
+  address       String?
+  role          String       @default("CUSTOMER") // CUSTOMER | MERCHANT | DRIVER | ADMIN
+  accountStatus String       @default("NONE") // NONE | PENDING | APPROVED | REJECTED — يخص التاجر والكابتن
+  storeId       String? // للتاجر المعتمد — معرف متجره الخاص
+  agentId       String? // للكابتن المعتمد — معرف سجل الوكيل المرتبط بحسابه
+  joinRequest   JoinRequest?
+  orders        Order[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+// طلبات الانضمام (صاحب مطعم/متجر أو كابتن) — يراجعها المدير ويوافق أو يرفض
+model JoinRequest {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         String // MERCHANT | DRIVER
+  storeName    String? // للتاجر: اسم المتجر المطلوب
+  storeType    String? // للتاجر: RESTAURANT | STORE | MARKET
+  category     String? // للتاجر: فئة المتجر
+  address      String? // للتاجر: موقع المتجر في حديثة
+  contactPhone String? // هاتف إضافي اختياري (يختلف عن هاتف الحساب)
+  vehicleType  String? // للكابتن: CAR | MOTORCYCLE
+  vehiclePlate String? // للكابتن: رقم اللوحة (اختياري)
+  commission   Float? // العمولة المتفق عليها مع المدير عند الموافقة (٪)
+  status       String   @default("PENDING") // PENDING | APPROVED | REJECTED
+  note         String? // ملاحظة المدير عند الموافقة أو الرفض
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// رموز التحقق OTP المرسلة إلى الهاتف
+model OtpCode {
+  id        String   @id @default(cuid())
+  phone     String   @unique // بصيغة 07XXXXXXXXX
+  code      String // رمز من 6 أرقام
+  expiresAt DateTime // صلاحية 5 دقائق
+  attempts  Int      @default(0) // عدد محاولات الدخول (حد أقصى 5)
+  createdAt DateTime @default(now())
+}
+
+// المطاعم والمتاجر والأسواق (كلها متاجر في تطبيق التوصيل)
+model Store {
+  id           String   @id @default(cuid())
+  name         String
+  description  String?
+  type         String   @default("RESTAURANT") // RESTAURANT | STORE | MARKET
+  category     String   @default("مطاعم")
+  imageUrl     String?
+  coverUrl     String?
+  rating       Float    @default(4.5)
+  deliveryFee  Float    @default(1000)
+  deliveryTime String   @default("30-45 دقيقة")
+  minOrder     Float    @default(0)
+  isOpen       Boolean  @default(true)
+  isFeatured   Boolean  @default(false)
+  phone        String?
+  address      String?
+  lat          Float? // خط العرض - مدينة حديثة
+  lng          Float? // خط الطول - مدينة حديثة
+  items        MenuItem[]
+  orders       Order[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// أصناف المنيو (أطباق / منتجات)
+model MenuItem {
+  id          String   @id @default(cuid())
+  storeId     String
+  store       Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  price       Float
+  section     String   @default("الأطباق الرئيسية")
+  imageUrl    String?
+  isAvailable Boolean  @default(true)
+  isPopular   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// الوكلاء (الكباتن) - سيارة أو دراجة
+model Agent {
+  id              String   @id @default(cuid())
+  name            String
+  phone           String
+  vehicleType     String   @default("MOTORCYCLE") // CAR | MOTORCYCLE
+  vehiclePlate    String?
+  status          String   @default("AVAILABLE") // AVAILABLE | BUSY | OFFLINE
+  rating          Float    @default(5)
+  totalDeliveries Int      @default(0)
+  lat             Float? // آخر موقع معروف - حديثة
+  lng             Float?
+  orders          Order[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// الطلبات
+model Order {
+  id            String      @id @default(cuid())
+  code          String      @unique
+  customerName  String
+  customerPhone String
+  address       String
+  notes         String?
+  userId        String?
+  user          User?       @relation(fields: [userId], references: [id])
+  storeId       String
+  store         Store       @relation(fields: [storeId], references: [id])
+  agentId       String?
+  agent         Agent?      @relation(fields: [agentId], references: [id])
+  status        String      @default("PENDING") // PENDING | CONFIRMED | PREPARING | DELIVERING | DELIVERED | CANCELLED
+  paymentMethod String      @default("CASH") // CASH | CARD
+  subtotal      Float
+  deliveryFee   Float
+  total         Float
+  destLat       Float? // موقع العميل على خريطة حديثة
+  destLng       Float?
+  deliveringAt  DateTime? // وقت بدء التوصيل (لحساب التتبع المباشر)
+  etaMinutes    Int? // مدة الوصول المتوقعة بالدقائق
+  items         OrderItem[]
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+// عناصر الطلب
+model OrderItem {
+  id       String @id @default(cuid())
+  orderId  String
+  order    Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  name     String
+  price    Float
+  quantity Int
+}

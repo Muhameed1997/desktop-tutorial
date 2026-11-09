@@ -1,0 +1,572 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from "react";
+     4→import { Plus, Pencil, Trash2, Utensils, PackageOpen, Power, Search, Loader2, Star, MapPin } from "lucide-react";
+     5→import { Button } from "@/components/ui/button";
+     6→import { Input } from "@/components/ui/input";
+     7→import { Label } from "@/components/ui/label";
+     8→import { Textarea } from "@/components/ui/textarea";
+     9→import { Switch } from "@/components/ui/switch";
+    10→import { Badge } from "@/components/ui/badge";
+    11→import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+    12→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+    13→import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+    14→import { Skeleton } from "@/components/ui/skeleton";
+    15→import { toast } from "@/hooks/use-toast";
+    16→import { formatIQD } from "@/lib/format";
+    17→import { TYPE_AR, type Store, type StoreItem, type StoreType } from "@/lib/types";
+    18→import { HADITHA_CENTER } from "@/lib/geo";
+    19→import LocationPickerMap from "./location-picker-map";
+    20→import { adminPinHeaders } from "./admin-join";
+    21→
+    22→const TYPE_OPTIONS: { value: StoreType; label: string; icon: string }[] = [
+    23→  { value: "RESTAURANT", label: "مطعم", icon: "🍽️" },
+    24→  { value: "STORE", label: "متجر", icon: "🏬" },
+    25→  { value: "MARKET", label: "سوق", icon: "🛒" },
+    26→];
+    27→
+    28→const CATEGORY_PRESETS: Record<StoreType, string[]> = {
+    29→  RESTAURANT: ["عراقي", "برجر", "بيتزا", "شاورما", "دجاج ومشويات", "أسماك", "حلويات", "قهوة ومشروبات", "فطور صباحي"],
+    30→  STORE: ["حلويات ومخبوزات", "عصائر ومثلجات", "بقالة", "إلكترونيات", "ملابس", "صيدلية"],
+    31→  MARKET: ["خضار وفواكه", "سوبرماركت", "تمر ومكسرات", "لحوم ودواجن", "منتجات ألبان"],
+    32→};
+    33→
+    34→interface StoreForm {
+    35→  id?: string;
+    36→  name: string;
+    37→  description: string;
+    38→  type: StoreType;
+    39→  category: string;
+    40→  imageUrl: string;
+    41→  deliveryFee: string;
+    42→  deliveryTime: string;
+    43→  minOrder: string;
+    44→  phone: string;
+    45→  address: string;
+    46→  lat: string;
+    47→  lng: string;
+    48→  isOpen: boolean;
+    49→  isFeatured: boolean;
+    50→}
+    51→
+    52→const EMPTY_FORM: StoreForm = {
+    53→  name: "",
+    54→  description: "",
+    55→  type: "RESTAURANT",
+    56→  category: "عراقي",
+    57→  imageUrl: "",
+    58→  deliveryFee: "1000",
+    59→  deliveryTime: "30-45 دقيقة",
+    60→  minOrder: "0",
+    61→  phone: "",
+    62→  address: "",
+    63→  lat: String(HADITHA_CENTER.lat),
+    64→  lng: String(HADITHA_CENTER.lng),
+    65→  isOpen: true,
+    66→  isFeatured: false,
+    67→};
+    68→
+    69→export function AdminStoresTab() {
+    70→  const [stores, setStores] = useState<Store[]>([]);
+    71→  const [loading, setLoading] = useState(true);
+    72→  const [dialogOpen, setDialogOpen] = useState(false);
+    73→  const [form, setForm] = useState<StoreForm>(EMPTY_FORM);
+    74→  const [saving, setSaving] = useState(false);
+    75→  const [deleteTarget, setDeleteTarget] = useState<Store | null>(null);
+    76→  const [menuStore, setMenuStore] = useState<Store | null>(null);
+    77→  const [filter, setFilter] = useState<"ALL" | StoreType>("ALL");
+    78→  const [search, setSearch] = useState("");
+    79→
+    80→  const load = useCallback(() => {
+    81→    setLoading(true);
+    82→    fetch("/api/stores")
+    83→      .then((r) => r.json())
+    84→      .then((d) => setStores(Array.isArray(d) ? d : []))
+    85→      .catch(() => toast({ title: "خطأ في جلب المتاجر", variant: "destructive" }))
+    86→      .finally(() => setLoading(false));
+    87→  }, []);
+    88→
+    89→  useEffect(() => {
+    90→    load();
+    91→  }, [load]);
+    92→
+    93→  const filtered = useMemo(() => {
+    94→    return stores.filter(
+    95→      (s) =>
+    96→        (filter === "ALL" || s.type === filter) &&
+    97→        (!search.trim() || s.name.includes(search.trim()) || s.category.includes(search.trim()))
+    98→    );
+    99→  }, [stores, filter, search]);
+   100→
+   101→  function openCreate() {
+   102→    setForm(EMPTY_FORM);
+   103→    setDialogOpen(true);
+   104→  }
+   105→
+   106→  function openEdit(s: Store) {
+   107→    setForm({
+   108→      id: s.id,
+   109→      name: s.name,
+   110→      description: s.description || "",
+   111→      type: s.type,
+   112→      category: s.category,
+   113→      imageUrl: s.imageUrl || "",
+   114→      deliveryFee: String(s.deliveryFee),
+   115→      deliveryTime: s.deliveryTime,
+   116→      minOrder: String(s.minOrder),
+   117→      phone: s.phone || "",
+   118→      address: s.address || "",
+   119→      lat: s.lat != null ? String(s.lat) : String(HADITHA_CENTER.lat),
+   120→      lng: s.lng != null ? String(s.lng) : String(HADITHA_CENTER.lng),
+   121→      isOpen: s.isOpen,
+   122→      isFeatured: s.isFeatured,
+   123→    });
+   124→    setDialogOpen(true);
+   125→  }
+   126→
+   127→  async function save() {
+   128→    if (!form.name.trim()) {
+   129→      toast({ title: "اسم المتجر مطلوب", variant: "destructive" });
+   130→      return;
+   131→    }
+   132→    setSaving(true);
+   133→    const payload = {
+   134→      name: form.name.trim(),
+   135→      description: form.description.trim() || null,
+   136→      type: form.type,
+   137→      category: form.category,
+   138→      imageUrl: form.imageUrl.trim() || null,
+   139→      deliveryFee: Number(form.deliveryFee) || 0,
+   140→      deliveryTime: form.deliveryTime.trim() || "30-45 دقيقة",
+   141→      minOrder: Number(form.minOrder) || 0,
+   142→      phone: form.phone.trim() || null,
+   143→      address: form.address.trim() || null,
+   144→      lat: Number(form.lat) || 34.1329,
+   145→      lng: Number(form.lng) || 42.3775,
+   146→      isOpen: form.isOpen,
+   147→      isFeatured: form.isFeatured,
+   148→    };
+   149→    try {
+   150→      const res = await fetch(form.id ? `/api/stores/${form.id}` : "/api/stores", {
+   151→        method: form.id ? "PATCH" : "POST",
+   152→        headers: { "Content-Type": "application/json", ...adminPinHeaders() },
+   153→        body: JSON.stringify(payload),
+   154→      });
+   155→      const data = await res.json();
+   156→      if (!res.ok) throw new Error(data.error);
+   157→      toast({ title: form.id ? "تم تعديل المتجر ✅" : "تمت إضافة المتجر ✅" });
+   158→      setDialogOpen(false);
+   159→      load();
+   160→    } catch (e) {
+   161→      toast({ title: "خطأ في الحفظ", description: e instanceof Error ? e.message : "حاول مجدداً", variant: "destructive" });
+   162→    }
+   163→    setSaving(false);
+   164→  }
+   165→
+   166→  async function toggleOpen(s: Store) {
+   167→    await fetch(`/api/stores/${s.id}`, {
+   168→      method: "PATCH",
+   169→      headers: { "Content-Type": "application/json", ...adminPinHeaders() },
+   170→      body: JSON.stringify({ isOpen: !s.isOpen }),
+   171→    });
+   172→    toast({ title: !s.isOpen ? `${s.name}: مفتوح الآن 🟢` : `${s.name}: مغلق الآن 🔴` });
+   173→    load();
+   174→  }
+   175→
+   176→  async function remove() {
+   177→    if (!deleteTarget) return;
+   178→    await fetch(`/api/stores/${deleteTarget.id}`, { method: "DELETE", headers: adminPinHeaders() });
+   179→    toast({ title: `تم حذف "${deleteTarget.name}"` });
+   180→    setDeleteTarget(null);
+   181→    load();
+   182→  }
+   183→
+   184→  return (
+   185→    <div className="space-y-4">
+   186→      {/* شريط الأدوات */}
+   187→      <div className="flex flex-wrap items-center gap-2">
+   188→        <Select value={filter} onValueChange={(v) => setFilter(v as "ALL" | StoreType)}>
+   189→          <SelectTrigger className="w-36 rounded-full bg-white h-10">
+   190→            <SelectValue />
+   191→          </SelectTrigger>
+   192→          <SelectContent>
+   193→            <SelectItem value="ALL">كل الأنواع</SelectItem>
+   194→            {TYPE_OPTIONS.map((t) => (
+   195→              <SelectItem key={t.value} value={t.value}>{t.icon} {t.label}</SelectItem>
+   196→            ))}
+   197→          </SelectContent>
+   198→        </Select>
+   199→        <div className="relative flex-1 min-w-40">
+   200→          <Search className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   201→          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ابحث بالاسم أو التصنيف..." className="ps-9 rounded-full bg-white h-10" />
+   202→        </div>
+   203→        <Button className="rounded-full bg-[#0000CE] hover:bg-[#0000A3] h-10 px-4 font-bold" onClick={openCreate}>
+   204→          <Plus className="h-4 w-4 me-1.5" /> إضافة متجر
+   205→        </Button>
+   206→      </div>
+   207→
+   208→      {/* القائمة */}
+   209→      {loading ? (
+   210→        <div className="grid sm:grid-cols-2 gap-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-2xl" />)}</div>
+   211→      ) : filtered.length === 0 ? (
+   212→        <div className="bg-white rounded-2xl p-10 text-center border border-dashed border-[#00C46A]">
+   213→          <div className="text-4xl mb-2">🏪</div>
+   214→          <p className="font-bold">لا توجد متاجر مطابقة</p>
+   215→          <p className="text-sm text-muted-foreground mt-1">اضغط «إضافة متجر» لإنشاء أول مطعم أو متجر أو سوق</p>
+   216→        </div>
+   217→      ) : (
+   218→        <div className="grid sm:grid-cols-2 gap-3">
+   219→          {filtered.map((s) => (
+   220→            <div key={s.id} className="bg-white rounded-2xl border border-border p-3.5 flex gap-3">
+   221→              <div className="w-16 h-16 rounded-xl overflow-hidden shrink-0 bg-[#EAEDFF]">
+   222→                <img src={s.imageUrl || (s.type === "MARKET" ? "/placeholder-market.svg" : s.type === "STORE" ? "/placeholder-store.svg" : "/placeholder-restaurant.svg")} alt={s.name} className="w-full h-full object-cover" />
+   223→              </div>
+   224→              <div className="flex-1 min-w-0">
+   225→                <div className="flex items-center gap-1.5 flex-wrap">
+   226→                  <h4 className="font-black text-sm truncate">{s.name}</h4>
+   227→                  <Badge className={`border-0 text-[10px] ${s.type === "MARKET" ? "bg-[#DFFFEF] text-[#00875A]" : s.type === "STORE" ? "bg-[#EEF1F6] text-[#3A4356]" : "bg-[#EAEDFF] text-[#0000A3]"}`}>{TYPE_AR[s.type]}</Badge>
+   228→                  {s.isFeatured && <Badge className="border-0 text-[10px] bg-[#CFFFE2] text-[#3A4356]"><Star className="h-2.5 w-2.5 me-0.5 fill-current" /> رواج</Badge>}
+   229→                </div>
+   230→                <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{s.category} · {s.deliveryTime} · توصيل {formatIQD(s.deliveryFee)} · {s.items?.length || 0} صنف</p>
+   231→                <div className="flex items-center gap-1.5 mt-2">
+   232→                  <Button size="sm" variant="outline" className="h-7 rounded-full text-[11px] px-2.5" onClick={() => openEdit(s)}>
+   233→                    <Pencil className="h-3 w-3 me-1" /> تعديل
+   234→                  </Button>
+   235→                  <Button size="sm" variant="outline" className="h-7 rounded-full text-[11px] px-2.5" onClick={() => setMenuStore(s)}>
+   236→                    <Utensils className="h-3 w-3 me-1" /> المنيو ({s.items?.length || 0})
+   237→                  </Button>
+   238→                  <Button
+   239→                    size="sm"
+   240→                    variant="outline"
+   241→                    className={`h-7 rounded-full text-[11px] px-2.5 ${s.isOpen ? "text-[#00875A]" : "text-red-500"}`}
+   242→                    onClick={() => toggleOpen(s)}
+   243→                  >
+   244→                    <Power className="h-3 w-3 me-1" /> {s.isOpen ? "مفتوح" : "مغلق"}
+   245→                  </Button>
+   246→                  <Button size="sm" variant="outline" className="h-7 w-7 rounded-full p-0 text-red-500 hover:bg-red-50" onClick={() => setDeleteTarget(s)} aria-label={`حذف ${s.name}`}>
+   247→                    <Trash2 className="h-3.5 w-3.5" />
+   248→                  </Button>
+   249→                </div>
+   250→              </div>
+   251→            </div>
+   252→          ))}
+   253→        </div>
+   254→      )}
+   255→
+   256→      {/* نافذة الإضافة/التعديل */}
+   257→      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+   258→        <DialogContent className="max-w-lg max-h-[88vh] overflow-y-auto nice-scroll">
+   259→          <DialogHeader>
+   260→            <DialogTitle className="font-black">{form.id ? `تعديل: ${form.name}` : "إضافة متجر جديد"}</DialogTitle>
+   261→            <DialogDescription>أضف مطعماً أو متجراً أو سوقاً وسيظهر مباشرة في واجهة العملاء</DialogDescription>
+   262→          </DialogHeader>
+   263→          <div className="space-y-3.5">
+   264→            <div className="space-y-1.5">
+   265→              <Label>نوع المتجر *</Label>
+   266→              <div className="grid grid-cols-3 gap-2">
+   267→                {TYPE_OPTIONS.map((t) => (
+   268→                  <button
+   269→                    key={t.value}
+   270→                    type="button"
+   271→                    onClick={() => { setForm((f) => ({ ...f, type: t.value, category: CATEGORY_PRESETS[t.value][0] })); }}
+   272→                    className={`rounded-xl border p-2.5 text-center text-xs font-bold transition ${form.type === t.value ? "border-[#0000CE] bg-[#EAEDFF]" : "border-border hover:border-[#00C46A]"}`}
+   273→                  >
+   274→                    <div className="text-lg">{t.icon}</div>
+   275→                    {t.label}
+   276→                  </button>
+   277→                ))}
+   278→              </div>
+   279→            </div>
+   280→            <div className="grid sm:grid-cols-2 gap-3">
+   281→              <div className="space-y-1.5">
+   282→                <Label htmlFor="st-name">الاسم *</Label>
+   283→                <Input id="st-name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="مثال: بيت الكبابي" className="bg-[#EAEDFF]" />
+   284→              </div>
+   285→              <div className="space-y-1.5">
+   286→                <Label>التصنيف</Label>
+   287→                <Select value={form.category} onValueChange={(v) => setForm((f) => ({ ...f, category: v }))}>
+   288→                  <SelectTrigger className="bg-[#EAEDFF]"><SelectValue /></SelectTrigger>
+   289→                  <SelectContent>
+   290→                    {CATEGORY_PRESETS[form.type].map((c) => (
+   291→                      <SelectItem key={c} value={c}>{c}</SelectItem>
+   292→                    ))}
+   293→                  </SelectContent>
+   294→                </Select>
+   295→              </div>
+   296→            </div>
+   297→            <div className="space-y-1.5">
+   298→              <Label htmlFor="st-desc">الوصف</Label>
+   299→              <Textarea id="st-desc" value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} placeholder="وصف قصير يظهر للعملاء..." className="bg-[#EAEDFF] min-h-16" />
+   300→            </div>
+   301→            <div className="space-y-1.5">
+   302→              <Label htmlFor="st-img">رابط صورة المتجر</Label>
+   303→              <Input id="st-img" value={form.imageUrl} onChange={(e) => setForm((f) => ({ ...f, imageUrl: e.target.value }))} placeholder="https://... (اتركه فارغاً لاستخدام صورة افتراضية)" dir="ltr" className="bg-[#EAEDFF] text-left text-xs" />
+   304→              {form.imageUrl.trim() && (
+   305→                <div className="h-24 w-40 rounded-xl overflow-hidden border">
+   306→                  <img src={form.imageUrl} alt="معاينة" className="w-full h-full object-cover" />
+   307→                </div>
+   308→              )}
+   309→            </div>
+   310→            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+   311→              <div className="space-y-1.5">
+   312→                <Label htmlFor="st-fee">أجرة التوصيل (د.ع)</Label>
+   313→                <Input id="st-fee" type="number" value={form.deliveryFee} onChange={(e) => setForm((f) => ({ ...f, deliveryFee: e.target.value }))} className="bg-[#EAEDFF]" />
+   314→              </div>
+   315→              <div className="space-y-1.5">
+   316→                <Label htmlFor="st-min">أدنى طلب (د.ع)</Label>
+   317→                <Input id="st-min" type="number" value={form.minOrder} onChange={(e) => setForm((f) => ({ ...f, minOrder: e.target.value }))} className="bg-[#EAEDFF]" />
+   318→              </div>
+   319→              <div className="space-y-1.5">
+   320→                <Label htmlFor="st-time">وقت التوصيل</Label>
+   321→                <Input id="st-time" value={form.deliveryTime} onChange={(e) => setForm((f) => ({ ...f, deliveryTime: e.target.value }))} className="bg-[#EAEDFF]" />
+   322→              </div>
+   323→            </div>
+   324→            <div className="grid sm:grid-cols-2 gap-3">
+   325→              <div className="space-y-1.5">
+   326→                <Label htmlFor="st-phone">هاتف المتجر</Label>
+   327→                <Input id="st-phone" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} placeholder="07XXXXXXXXX" dir="ltr" className="bg-[#EAEDFF] text-left" />
+   328→              </div>
+   329→              <div className="space-y-1.5">
+   330→                <Label htmlFor="st-addr">العنوان</Label>
+   331→                <Input id="st-addr" value={form.address} onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))} placeholder="حديثة – حي المعلمين" className="bg-[#EAEDFF]" />
+   332→              </div>
+   333→            </div>
+   334→            <div className="space-y-1.5">
+   335→              <Label className="flex items-center gap-1.5">
+   336→                <MapPin className="h-3.5 w-3.5 text-[#0000CE]" /> موقع المتجر على الخريطة
+   337→              </Label>
+   338→              <div className="rounded-xl overflow-hidden border border-border">
+   339→                <LocationPickerMap
+   340→                  value={{ lat: Number(form.lat) || HADITHA_CENTER.lat, lng: Number(form.lng) || HADITHA_CENTER.lng }}
+   341→                  onChange={(p) => setForm((f) => ({ ...f, lat: p.lat.toFixed(6), lng: p.lng.toFixed(6) }))}
+   342→                  className="h-56 w-full"
+   343→                />
+   344→              </div>
+   345→              <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+   346→                <MapPin className="h-3 w-3 text-[#0000CE]" />
+   347→                انقر على الخريطة أو اسحب الدبوس 📍 — يُحفظ الموقع تلقائياً داخل مدينة حديثة
+   348→                <span dir="ltr" className="font-bold">({form.lat}, {form.lng})</span>
+   349→              </p>
+   350→            </div>
+   351→            <div className="flex items-center justify-between rounded-xl border p-3">
+   352→              <Label htmlFor="st-open" className="cursor-pointer">المتجر مفتوح لاستقبال الطلبات</Label>
+   353→              <Switch id="st-open" checked={form.isOpen} onCheckedChange={(v) => setForm((f) => ({ ...f, isOpen: v }))} />
+   354→            </div>
+   355→            <div className="flex items-center justify-between rounded-xl border p-3">
+   356→              <Label htmlFor="st-feat" className="cursor-pointer">عرضه ضمن «الأكثر رواجاً»</Label>
+   357→              <Switch id="st-feat" checked={form.isFeatured} onCheckedChange={(v) => setForm((f) => ({ ...f, isFeatured: v }))} />
+   358→            </div>
+   359→            <Button className="w-full rounded-full bg-[#0000CE] hover:bg-[#0000A3] h-11 font-black" onClick={save} disabled={saving}>
+   360→              {saving && <Loader2 className="h-4 w-4 animate-spin me-2" />}
+   361→              {form.id ? "حفظ التعديلات" : "إضافة المتجر"}
+   362→            </Button>
+   363→          </div>
+   364→        </DialogContent>
+   365→      </Dialog>
+   366→
+   367→      {/* إدارة المنيو */}
+   368→      <MenuManager store={menuStore} onClose={() => setMenuStore(null)} onChanged={load} />
+   369→
+   370→      {/* تأكيد الحذف */}
+   371→      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+   372→        <AlertDialogContent dir="rtl">
+   373→          <AlertDialogHeader>
+   374→            <AlertDialogTitle>حذف «{deleteTarget?.name}»؟</AlertDialogTitle>
+   375→            <AlertDialogDescription>
+   376→              سيتم حذف المتجر وكل أصنافه نهائياً. لا يمكن التراجع عن هذا الإجراء.
+   377→            </AlertDialogDescription>
+   378→          </AlertDialogHeader>
+   379→          <AlertDialogFooter>
+   380→            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+   381→            <AlertDialogAction className="bg-red-500 hover:bg-red-600" onClick={remove}>نعم، احذف</AlertDialogAction>
+   382→          </AlertDialogFooter>
+   383→        </AlertDialogContent>
+   384→      </AlertDialog>
+   385→    </div>
+   386→  );
+   387→}
+   388→
+   389→// ===== إدارة أصناف المنيو لمتجر معين =====
+   390→function MenuManager({ store, onClose, onChanged }: { store: Store | null; onClose: () => void; onChanged: () => void }) {
+   391→  const [items, setItems] = useState<StoreItem[]>([]);
+   392→  const [loading, setLoading] = useState(false);
+   393→  const [name, setName] = useState("");
+   394→  const [price, setPrice] = useState("");
+   395→  const [desc, setDesc] = useState("");
+   396→  const [section, setSection] = useState("الأطباق الرئيسية");
+   397→  const [imageUrl, setImgUrl] = useState("");
+   398→  const [popular, setPopular] = useState(false);
+   399→  const [saving, setSaving] = useState(false);
+   400→  const [deleteId, setDeleteId] = useState<string | null>(null);
+   401→
+   402→  const reload = useCallback(() => {
+   403→    if (!store) return;
+   404→    setLoading(true);
+   405→    fetch(`/api/stores/${store.id}`)
+   406→      .then((r) => r.json())
+   407→      .then((d) => setItems(Array.isArray(d.items) ? d.items : []))
+   408→      .finally(() => setLoading(false));
+   409→  }, [store]);
+   410→
+   411→  useEffect(() => {
+   412→    reload();
+   413→  }, [reload]);
+   414→
+   415→  const sections = useMemo(() => Array.from(new Set(items.map((i) => i.section))), [items]);
+   416→
+   417→  async function addItem() {
+   418→    if (!store || !name.trim() || !price) {
+   419→      toast({ title: "الاسم والسعر مطلوبان", variant: "destructive" });
+   420→      return;
+   421→    }
+   422→    setSaving(true);
+   423→    try {
+   424→      const res = await fetch("/api/menu-items", {
+   425→        method: "POST",
+   426→        headers: { "Content-Type": "application/json", ...adminPinHeaders() },
+   427→        body: JSON.stringify({
+   428→          storeId: store.id,
+   429→          name: name.trim(),
+   430→          description: desc.trim() || null,
+   431→          price: Number(price),
+   432→          section: section.trim() || "الأطباق الرئيسية",
+   433→          imageUrl: imageUrl.trim() || null,
+   434→          isPopular: popular,
+   435→        }),
+   436→      });
+   437→      if (!res.ok) throw new Error();
+   438→      toast({ title: "تمت إضافة الصنف ✅" });
+   439→      setName(""); setPrice(""); setDesc(""); setImgUrl(""); setPopular(false);
+   440→      reload();
+   441→      onChanged();
+   442→    } catch {
+   443→      toast({ title: "تعذر إضافة الصنف", variant: "destructive" });
+   444→    }
+   445→    setSaving(false);
+   446→  }
+   447→
+   448→  async function toggleAvailable(it: StoreItem) {
+   449→    await fetch(`/api/menu-items/${it.id}`, {
+   450→      method: "PATCH",
+   451→      headers: { "Content-Type": "application/json", ...adminPinHeaders() },
+   452→      body: JSON.stringify({ isAvailable: !it.isAvailable }),
+   453→    });
+   454→    reload();
+   455→  }
+   456→
+   457→  async function removeItem() {
+   458→    if (!deleteId) return;
+   459→    await fetch(`/api/menu-items/${deleteId}`, { method: "DELETE", headers: adminPinHeaders() });
+   460→    setDeleteId(null);
+   461→    reload();
+   462→    onChanged();
+   463→  }
+   464→
+   465→  return (
+   466→    <>
+   467→      <Dialog open={!!store} onOpenChange={(o) => !o && onClose()}>
+   468→        <DialogContent className="max-w-2xl max-h-[88vh] overflow-hidden flex flex-col">
+   469→          <DialogHeader>
+   470→            <DialogTitle className="font-black flex items-center gap-2">
+   471→              <Utensils className="h-5 w-5 text-[#0000CE]" />
+   472→              منيو «{store?.name}»
+   473→            </DialogTitle>
+   474→            <DialogDescription>أضف الأطباق أو المنتجات وأسعارها — ستظهر فوراً للعملاء</DialogDescription>
+   475→          </DialogHeader>
+   476→
+   477→          {/* نموذج إضافة صنف */}
+   478→          <div className="rounded-2xl border bg-[#EAEDFF] p-3.5 space-y-3">
+   479→            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+   480→              <div className="col-span-2 space-y-1">
+   481→                <Label htmlFor="mi-name" className="text-xs">اسم الصنف *</Label>
+   482→                <Input id="mi-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="مثال: كباب مشكل" className="bg-white h-9" />
+   483→              </div>
+   484→              <div className="space-y-1">
+   485→                <Label htmlFor="mi-price" className="text-xs">السعر (د.ع) *</Label>
+   486→                <Input id="mi-price" type="number" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="5000" className="bg-white h-9" />
+   487→              </div>
+   488→              <div className="space-y-1">
+   489→                <Label htmlFor="mi-sec" className="text-xs">القسم</Label>
+   490→                <Input id="mi-sec" value={section} onChange={(e) => setSection(e.target.value)} list="sections-list" className="bg-white h-9" />
+   491→                <datalist id="sections-list">
+   492→                  {["المقبلات", "الأطباق الرئيسية", "المشروبات", "الحلويات", ...sections].map((s) => (
+   493→                    <option key={s} value={s} />
+   494→                  ))}
+   495→                </datalist>
+   496→              </div>
+   497→            </div>
+   498→            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+   499→              <div className="sm:col-span-2 space-y-1">
+   500→                <Label htmlFor="mi-img" className="text-xs">رابط صورة الصنف (اختياري)</Label>
+   501→                <Input id="mi-img" value={imageUrl} onChange={(e) => setImgUrl(e.target.value)} dir="ltr" className="bg-white h-9 text-left text-xs" placeholder="https://..." />
+   502→              </div>
+   503→              <div className="flex items-end pb-0.5">
+   504→                <label className="flex items-center gap-2 text-xs font-bold cursor-pointer">
+   505→                  <Switch checked={popular} onCheckedChange={setPopular} /> الأكثر طلباً 🔥
+   506→                </label>
+   507→              </div>
+   508→            </div>
+   509→            <div className="space-y-1">
+   510→              <Label htmlFor="mi-desc" className="text-xs">وصف قصير (اختياري)</Label>
+   511→              <Input id="mi-desc" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="المكونات أو التفاصيل..." className="bg-white h-9" />
+   512→            </div>
+   513→            <Button className="w-full rounded-full bg-[#0000CE] hover:bg-[#0000A3] h-9 font-bold" onClick={addItem} disabled={saving}>
+   514→              {saving ? <Loader2 className="h-4 w-4 animate-spin me-1.5" /> : <Plus className="h-4 w-4 me-1.5" />}
+   515→              إضافة الصنف للمنيو
+   516→            </Button>
+   517→          </div>
+   518→
+   519→          {/* قائمة الأصناف */}
+   520→          <div className="flex-1 overflow-y-auto nice-scroll mt-3 max-h-[42vh]">
+   521→            {loading ? (
+   522→              <p className="text-center text-sm text-muted-foreground py-6">جاري التحميل...</p>
+   523→            ) : items.length === 0 ? (
+   524→              <div className="text-center py-8">
+   525→                <PackageOpen className="h-10 w-10 mx-auto text-[#00C46A] mb-2" />
+   526→                <p className="text-sm text-muted-foreground">لا توجد أصناف بعد — أضف أول صنف من الأعلى</p>
+   527→              </div>
+   528→            ) : (
+   529→              <div className="space-y-2 pe-1">
+   530→                {items.map((it) => (
+   531→                  <div key={it.id} className="flex items-center gap-2.5 bg-white border rounded-xl p-2.5">
+   532→                    <div className="w-11 h-11 rounded-lg overflow-hidden bg-[#EAEDFF] shrink-0">
+   533→                      <img src={it.imageUrl || "/placeholder-restaurant.svg"} alt={it.name} className="w-full h-full object-cover" />
+   534→                    </div>
+   535→                    <div className="flex-1 min-w-0">
+   536→                      <div className="flex items-center gap-1.5">
+   537→                        <span className="font-bold text-sm truncate">{it.name}</span>
+   538→                        {it.isPopular && <span className="text-[9px] bg-[#EAEDFF] text-[#0000CE] px-1 rounded font-bold">🔥</span>}
+   539→                      </div>
+   540→                      <span className="text-[11px] text-muted-foreground">{it.section}</span>
+   541→                    </div>
+   542→                    <span className="font-black text-sm text-[#0000CE] whitespace-nowrap">{formatIQD(it.price)}</span>
+   543→                    <Button size="sm" variant="outline" className={`h-7 rounded-full px-2 text-[10px] ${it.isAvailable ? "text-[#00875A]" : "text-red-500"}`} onClick={() => toggleAvailable(it)}>
+   544→                      {it.isAvailable ? "متوفر" : "نافذ"}
+   545→                    </Button>
+   546→                    <Button size="sm" variant="outline" className="h-7 w-7 rounded-full p-0 text-red-500" onClick={() => setDeleteId(it.id)} aria-label={`حذف ${it.name}`}>
+   547→                      <Trash2 className="h-3 w-3" />
+   548→                    </Button>
+   549→                  </div>
+   550→                ))}
+   551→              </div>
+   552→            )}
+   553→          </div>
+   554→        </DialogContent>
+   555→      </Dialog>
+   556→
+   557→      <AlertDialog open={!!deleteId} onOpenChange={(o) => !o && setDeleteId(null)}>
+   558→        <AlertDialogContent dir="rtl">
+   559→          <AlertDialogHeader>
+   560→            <AlertDialogTitle>حذف الصنف؟</AlertDialogTitle>
+   561→            <AlertDialogDescription>سيُحذف الصنف من المنيو نهائياً.</AlertDialogDescription>
+   562→          </AlertDialogHeader>
+   563→          <AlertDialogFooter>
+   564→            <AlertDialogCancel>إلغاء</AlertDialogCancel>
+   565→            <AlertDialogAction className="bg-red-500 hover:bg-red-600" onClick={removeItem}>احذف</AlertDialogAction>
+   566→          </AlertDialogFooter>
+   567→        </AlertDialogContent>
+   568→      </AlertDialog>
+   569→    </>
+   570→  );
+   571→}
+   572→

@@ -1,0 +1,1035 @@
+     1→"use client";
+     2→
+     3→// تدفق المصادقة الاحترافي ليجيلك — كما في تطبيقات التوصيل العالمية:
+     4→//   1) تسجيل الدخول: رقم الهاتف + كلمة المرور — دخول مباشر بدون رمز تحقق
+     5→//      • «نسيت كلمة المرور؟» → استعادتها برمز التحقق عبر رقم الهاتف
+     6→//      • «حساب جديد؟» → إنشاء حساب في دقيقة
+     7→//   2) إنشاء حساب: الاسم والهاتف وكلمة المرور، ثم رمز تحقق لتفعيل الرقم
+     8→//      (التاجر/الكابتن يكمل نموذج طلب الانضمام بعد إدخال الرمز)
+     9→//   3) نسيت كلمة المرور: رمز تحقق عبر الهاتف + كلمة مرور جديدة ثم دخول تلقائي
+    10→// مكوّن مشترك: يُعرض في شاشة الترحيب (قبل دخول التطبيق) وفي صفحة الحساب
+    11→import { useEffect, useState } from "react";
+    12→import { motion, AnimatePresence } from "framer-motion";
+    13→import Image from "next/image";
+    14→import {
+    15→  ArrowRight,
+    16→  CheckCircle2,
+    17→  Eye,
+    18→  EyeOff,
+    19→  KeyRound,
+    20→  Loader2,
+    21→  Lock,
+    22→  LogIn,
+    23→  MessageSquareText,
+    24→  Pencil,
+    25→  ShieldCheck,
+    26→  UserPlus,
+    27→  UserRound,
+    28→  UtensilsCrossed,
+    29→} from "lucide-react";
+    30→import { Button } from "@/components/ui/button";
+    31→import { Input } from "@/components/ui/input";
+    32→import { Label } from "@/components/ui/label";
+    33→import { InputOTP, InputOTPGroup, InputOTPSlot } from "@/components/ui/input-otp";
+    34→import { useToast } from "@/hooks/use-toast";
+    35→import { formatPhoneDisplay, IQ_DIAL_CODE } from "@/lib/phone";
+    36→import type { JoinApplication } from "@/lib/types";
+    37→import { useAuthStore } from "@/store/auth-store";
+    38→import { JoinApplicationForm } from "./join-application";
+    39→
+    40→export type AuthRole = "CUSTOMER" | "MERCHANT" | "DRIVER";
+    41→export type AuthMode = "login" | "register" | "forgot";
+    42→
+    43→interface AuthFlowProps {
+    44→  /** الدور المحدد مسبقاً من شاشة الترحيب */
+    45→  initialRole?: AuthRole;
+    46→  /** إخفاء خطوة «شو نوع حسابك؟» — لأن الاختيار تم في شاشة الترحيب قبلها */
+    47→  lockRole?: boolean;
+    48→  /** الشاشة الافتراضية عند الفتح — تسجيل الدخول افتراضياً */
+    49→  initialMode?: AuthMode;
+    50→  /** زر الرجوع — إن لم يُمرَّر لا يظهر زر رجوع */
+    51→  onBack?: () => void;
+    52→  /** إخفاء بطاقة الهوية الكبيرة (عند العرض داخل شاشة الترحيب التي لها غلافها) */
+    53→  showBrandCard?: boolean;
+    54→}
+    55→
+    56→export function AuthFlow({
+    57→  initialRole = "CUSTOMER",
+    58→  lockRole = false,
+    59→  initialMode = "login",
+    60→  onBack,
+    61→  showBrandCard = true,
+    62→}: AuthFlowProps) {
+    63→  const setUser = useAuthStore((s) => s.setUser);
+    64→  const { toast } = useToast();
+    65→
+    66→  // الوضع الحالي: دخول / إنشاء حساب / نسيت كلمة المرور
+    67→  const [mode, setMode] = useState<AuthMode>(initialMode);
+    68→
+    69→  // بيانات مشتركة بين الأوضاع — الرقم يبقى محفوظاً عند التنقل بين الشاشات
+    70→  const [phone, setPhone] = useState("");
+    71→  const [name, setName] = useState("");
+    72→  const [password, setPassword] = useState(""); // كلمة مرور إنشاء الحساب
+    73→  const [confirm, setConfirm] = useState("");
+    74→  const [showPass, setShowPass] = useState(false);
+    75→  const [showConfirm, setShowConfirm] = useState(false);
+    76→
+    77→  // تسجيل الدخول — رقم + كلمة مرور فقط
+    78→  const [loginPass, setLoginPass] = useState("");
+    79→  const [showLoginPass, setShowLoginPass] = useState(false);
+    80→  const [loginHint, setLoginHint] = useState<"NO_PASSWORD" | "NO_USER" | null>(null);
+    81→
+    82→  // خطوات إنشاء الحساب: البيانات → الرمز → نوع الحساب (لغير المقيّد) → نموذج الانضمام
+    83→  const [step, setStep] = useState<"credentials" | "code" | "role" | "apply">("credentials");
+    84→  const [code, setCode] = useState("");
+    85→  const [codeError, setCodeError] = useState<string | null>(null);
+    86→  const [isNewUser, setIsNewUser] = useState(false);
+    87→  const [devCode, setDevCode] = useState<string | null>(null);
+    88→
+    89→  // نسيت كلمة المرور: الرقم → الرمز + كلمة المرور الجديدة
+    90→  const [fStep, setFStep] = useState<"phone" | "reset">("phone");
+    91→  const [resetCode, setResetCode] = useState("");
+    92→  const [newPass, setNewPass] = useState("");
+    93→  const [newConfirm, setNewConfirm] = useState("");
+    94→  const [showNewPass, setShowNewPass] = useState(false);
+    95→  const [showNewConfirm, setShowNewConfirm] = useState(false);
+    96→  const [fHint, setFHint] = useState<"NO_USER" | null>(null);
+    97→  const [resetError, setResetError] = useState<string | null>(null);
+    98→
+    99→  const [busy, setBusy] = useState(false);
+   100→  const [resendIn, setResendIn] = useState(0);
+   101→  // الدور المختار — عميل (فوري) أو تاجر/كابتن (طلب انضمام يراجعه المدير)
+   102→  const [chosenRole, setChosenRole] = useState<AuthRole>(initialRole);
+   103→
+   104→  // عداد إعادة إرسال الرمز (45 ثانية)
+   105→  useEffect(() => {
+   106→    if (resendIn <= 0) return;
+   107→    const t = setTimeout(() => setResendIn((s) => s - 1), 1000);
+   108→    return () => clearTimeout(t);
+   109→  }, [resendIn]);
+   110→
+   111→  // ===== التنقل بين الأوضاع مع تصفير حالة كل وضع =====
+   112→  function goLogin() {
+   113→    setMode("login");
+   114→    setLoginHint(null);
+   115→    setStep("credentials");
+   116→    setCode("");
+   117→    setCodeError(null);
+   118→    setDevCode(null);
+   119→    setFStep("phone");
+   120→    setResetCode("");
+   121→    setNewPass("");
+   122→    setNewConfirm("");
+   123→    setResetError(null);
+   124→    setFHint(null);
+   125→  }
+   126→
+   127→  function goRegister() {
+   128→    setMode("register");
+   129→    setLoginHint(null);
+   130→    setFHint(null);
+   131→    setStep("credentials");
+   132→    setCode("");
+   133→    setCodeError(null);
+   134→    setDevCode(null);
+   135→  }
+   136→
+   137→  function goForgot(autoSend = false) {
+   138→    setMode("forgot");
+   139→    setLoginHint(null);
+   140→    setFStep("phone");
+   141→    setFHint(null);
+   142→    setResetCode("");
+   143→    setNewPass("");
+   144→    setNewConfirm("");
+   145→    setResetError(null);
+   146→    setDevCode(null);
+   147→    // عند القدوم من تنبيه «حساب بدون كلمة مرور» — نرسل الرمز تلقائياً للرقم المُدخل
+   148→    if (autoSend && phone.trim()) sendCode("RESET_PASSWORD");
+   149→  }
+   150→
+   151→  // ===== إرسال رمز التحقق — للتسجيل أو للاستعادة =====
+   152→  async function sendCode(purpose: "REGISTER" | "RESET_PASSWORD") {
+   153→    if (!phone.trim()) {
+   154→      toast({ title: "أدخل رقم هاتفك أولاً", variant: "destructive" });
+   155→      return;
+   156→    }
+   157→    setBusy(true);
+   158→    try {
+   159→      const res = await fetch("/api/auth/otp/send", {
+   160→        method: "POST",
+   161→        headers: { "Content-Type": "application/json" },
+   162→        body: JSON.stringify({ phone, purpose }),
+   163→      });
+   164→      const data = await res.json();
+   165→      if (!res.ok) {
+   166→        if (purpose === "RESET_PASSWORD" && data.code === "NO_USER") setFHint("NO_USER");
+   167→        toast({
+   168→          title: "تعذر إرسال الرمز",
+   169→          description: data.error,
+   170→          variant: "destructive",
+   171→        });
+   172→        setBusy(false);
+   173→        return;
+   174→      }
+   175→      setFHint(null);
+   176→      setIsNewUser(Boolean(data.isNewUser));
+   177→      setDevCode(data.devCode || null);
+   178→      setResendIn(45);
+   179→      setCode("");
+   180→      setResetCode("");
+   181→      if (purpose === "RESET_PASSWORD") {
+   182→        setFStep("reset");
+   183→        toast({
+   184→          title: "تم إرسال رمز التحقق 📲",
+   185→          description: `أدخل الرمز المرسل إلى ${formatPhoneDisplay(data.phone)} لتعيين كلمة مرور جديدة`,
+   186→        });
+   187→      } else {
+   188→        setStep("code");
+   189→        toast({
+   190→          title: "تم إرسال رمز التحقق 📲",
+   191→          description: `أدخل الرمز المرسل إلى ${formatPhoneDisplay(data.phone)}`,
+   192→        });
+   193→      }
+   194→    } catch {
+   195→      toast({ title: "خطأ بالشبكة", variant: "destructive" });
+   196→    }
+   197→    setBusy(false);
+   198→  }
+   199→
+   200→  // ===== إنشاء الحساب / تأكيد الدخول بعد إدخال الرمز =====
+   201→  async function verifyRegister(application?: JoinApplication) {
+   202→    if (code.length !== 6) {
+   203→      toast({ title: "أدخل الرمز المكوّن من 6 أرقام", variant: "destructive" });
+   204→      return;
+   205→    }
+   206→    setBusy(true);
+   207→    try {
+   208→      const res = await fetch("/api/auth/otp/verify", {
+   209→        method: "POST",
+   210→        headers: { "Content-Type": "application/json" },
+   211→        body: JSON.stringify({ phone, code, name, password, role: chosenRole, application }),
+   212→      });
+   213→      const data = await res.json();
+   214→      if (!res.ok) {
+   215→        setCodeError(data.error || "تعذر التحقق من الرمز");
+   216→        toast({ title: "تعذر التحقق", description: data.error, variant: "destructive" });
+   217→        setBusy(false);
+   218→        return;
+   219→      }
+   220→      setUser(data, data.sessionToken ?? null);
+   221→      if (data.joinSubmitted) {
+   222→        toast({
+   223→          title: `تم استلام طلب انضمامك ${chosenRole === "MERCHANT" ? "كمتجر" : "ككابتن"} 🎉`,
+   224→          description: "قيد المراجعة الآن من مدير التطبيق — وتقدر تطلب كعميل بشكل طبيعي حتى الموافقة",
+   225→        });
+   226→      } else {
+   227→        toast({
+   228→          title: data.isNewUser ? `تم إنشاء حسابك — أهلاً ${data.name}! 🎉` : `أهلاً بعودتك ${data.name} 👋`,
+   229→          description: data.isNewUser ? "حسابك محمي بكلمة مرور — تصفح واطلب بحرية" : "دخلت بنجاح — تصفح واطلب بحرية",
+   230→        });
+   231→      }
+   232→    } catch {
+   233→      toast({ title: "خطأ بالشبكة", variant: "destructive" });
+   234→    }
+   235→    setBusy(false);
+   236→  }
+   237→
+   238→  // زر الخطوة «رمز التحقق» في التسجيل — يعتمد على الدور المحدد مسبقاً
+   239→  function codeStepNext() {
+   240→    if (!isNewUser && !lockRole) return verifyRegister(); // رقم مسجّل — تأكيد كلمة المرور ودخول
+   241→    if (lockRole) {
+   242→      // من شاشة الترحيب: العميل يُنشأ فوراً، والتاجر/الكابتن يكملون نموذج الانضمام
+   243→      return chosenRole === "CUSTOMER" ? verifyRegister() : setStep("apply");
+   244→    }
+   245→    return setStep("role"); // حساب جديد — يحدد نوع حسابه
+   246→  }
+   247→
+   248→  const codeNextLabel = lockRole
+   249→    ? chosenRole === "CUSTOMER"
+   250→      ? isNewUser
+   251→        ? "تحقق وأنشئ حسابي"
+   252→        : "تحقق وادخل بحسابك"
+   253→      : "متابعة لنموذج الانضمام"
+   254→    : isNewUser
+   255→      ? "متابعة"
+   256→      : "تحقق وادخل بحسابك";
+   257→
+   258→  // ===== تسجيل الدخول — رقم الهاتف وكلمة المرور فقط، بدون رمز =====
+   259→  async function doLogin() {
+   260→    if (!phone.trim() || !loginPass) {
+   261→      toast({ title: "أدخل رقم هاتفك وكلمة المرور", variant: "destructive" });
+   262→      return;
+   263→    }
+   264→    setBusy(true);
+   265→    try {
+   266→      const res = await fetch("/api/auth/login", {
+   267→        method: "POST",
+   268→        headers: { "Content-Type": "application/json" },
+   269→        body: JSON.stringify({ phone, password: loginPass }),
+   270→      });
+   271→      const data = await res.json();
+   272→      if (!res.ok) {
+   273→        setLoginHint(data.code === "NO_PASSWORD" ? "NO_PASSWORD" : data.code === "NO_USER" ? "NO_USER" : null);
+   274→        toast({ title: "تعذر تسجيل الدخول", description: data.error, variant: "destructive" });
+   275→        setBusy(false);
+   276→        return;
+   277→      }
+   278→      setLoginHint(null);
+   279→      setUser(data, data.sessionToken ?? null);
+   280→      toast({
+   281→        title: `أهلاً بعودتك ${data.name} 👋`,
+   282→        description: "دخلت بنجاح — تصفح واطلب بحرية",
+   283→      });
+   284→    } catch {
+   285→      toast({ title: "خطأ بالشبكة", variant: "destructive" });
+   286→    }
+   287→    setBusy(false);
+   288→  }
+   289→
+   290→  // ===== التحقق من بيانات إنشاء الحساب قبل إرسال الرمز =====
+   291→  function registerNext() {
+   292→    if (!phone.trim()) {
+   293→      toast({ title: "أدخل رقم هاتفك أولاً", variant: "destructive" });
+   294→      return;
+   295→    }
+   296→    if (password.length < 6) {
+   297→      toast({ title: "كلمة المرور يجب أن تكون 6 أحرف على الأقل", variant: "destructive" });
+   298→      return;
+   299→    }
+   300→    if (password !== confirm) {
+   301→      toast({ title: "كلمتا المرور غير متطابقتين", variant: "destructive" });
+   302→      return;
+   303→    }
+   304→    sendCode("REGISTER");
+   305→  }
+   306→
+   307→  // ===== تعيين كلمة المرور الجديدة بعد التحقق من الرمز =====
+   308→  async function submitReset() {
+   309→    if (resetCode.length !== 6) {
+   310→      toast({ title: "أدخل الرمز المكوّن من 6 أرقام", variant: "destructive" });
+   311→      return;
+   312→    }
+   313→    if (newPass.length < 6) {
+   314→      toast({ title: "كلمة المرور يجب أن تكون 6 أحرف على الأقل", variant: "destructive" });
+   315→      return;
+   316→    }
+   317→    if (newPass !== newConfirm) {
+   318→      toast({ title: "كلمتا المرور غير متطابقتين", variant: "destructive" });
+   319→      return;
+   320→    }
+   321→    setBusy(true);
+   322→    try {
+   323→      const res = await fetch("/api/auth/password/reset", {
+   324→        method: "POST",
+   325→        headers: { "Content-Type": "application/json" },
+   326→        body: JSON.stringify({ phone, code: resetCode, password: newPass }),
+   327→      });
+   328→      const data = await res.json();
+   329→      if (!res.ok) {
+   330→        setResetError(data.error || "تعذر تعيين كلمة المرور");
+   331→        toast({ title: "تعذر تعيين كلمة المرور", description: data.error, variant: "destructive" });
+   332→        setBusy(false);
+   333→        return;
+   334→      }
+   335→      setUser(data, data.sessionToken ?? null);
+   336→      toast({
+   337→        title: "تم تعيين كلمة مرورك 🔐",
+   338→        description: `أهلاً ${data.name} — دخلت حسابك مباشرة، من الحين هذا رقمك وكلمتك`,
+   339→      });
+   340→    } catch {
+   341→      toast({ title: "خطأ بالشبكة", variant: "destructive" });
+   342→    }
+   343→    setBusy(false);
+   344→  }
+   345→
+   346→  return (
+   347→    <div className="max-w-md mx-auto px-4 pb-28 pt-4">
+   348→      {onBack && (
+   349→        <button
+   350→          onClick={onBack}
+   351→          className="flex items-center gap-1.5 text-sm font-bold text-muted-foreground hover:text-[#0000CE] transition mb-3"
+   352→        >
+   353→          <ArrowRight className="h-4 w-4" /> رجوع
+   354→        </button>
+   355→      )}
+   356→
+   357→      <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
+   358→        {showBrandCard && (
+   359→          <div className="brand-gradient rounded-3xl p-6 text-center text-white mb-4 overflow-hidden relative shadow-brand">
+   360→            <div className="absolute -top-6 -start-6 h-24 w-24 rounded-full bg-white/10" />
+   361→            <div className="absolute -bottom-8 -end-4 h-24 w-24 rounded-full bg-white/10" />
+   362→            <Image
+   363→              src="/brand/yjeelak-icon-v2.png"
+   364→              alt="يجيلك Yjeelak"
+   365→              width={64}
+   366→              height={64}
+   367→              className="h-16 w-16 rounded-2xl mx-auto mb-2.5 shadow-lg ring-2 ring-white/40"
+   368→            />
+   369→            <h1 className="text-xl font-black">أهلاً بك في يجيلك Yjeelak</h1>
+   370→            <p className="text-sm text-white/90 mt-1">
+   371→              سجّل الدخول برقمك وكلمة مرورك — أو أنشئ حساباً جديداً بدقيقة واحدة 🔐
+   372→            </p>
+   373→          </div>
+   374→        )}
+   375→
+   376→        <div className="bg-white rounded-2xl border border-border p-4">
+   377→          <AnimatePresence mode="wait">
+   378→            {/* ===== الوضع 1: تسجيل الدخول — رقم + كلمة مرور ===== */}
+   379→            {mode === "login" ? (
+   380→              <motion.div
+   381→                key="login"
+   382→                initial={{ opacity: 0, x: 16 }}
+   383→                animate={{ opacity: 1, x: 0 }}
+   384→                exit={{ opacity: 0, x: -16 }}
+   385→                transition={{ duration: 0.2 }}
+   386→                className="space-y-3.5"
+   387→              >
+   388→                <div>
+   389→                  <div className="flex items-center gap-2 text-sm font-black text-[#0B1220]">
+   390→                    <LogIn className="h-4.5 w-4.5 text-[#0000CE]" />
+   391→                    تسجيل الدخول
+   392→                  </div>
+   393→                  <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+   394→                    أدخل رقم هاتفك وكلمة المرور — دخول مباشر بدون رمز تحقق
+   395→                  </p>
+   396→                </div>
+   397→
+   398→                <PhoneField id="login-phone" value={phone} onChange={setPhone} onEnter={doLogin} />
+   399→
+   400→                <div className="space-y-1.5">
+   401→                  <Label htmlFor="login-pass">كلمة المرور</Label>
+   402→                  <PasswordInput
+   403→                    id="login-pass"
+   404→                    value={loginPass}
+   405→                    onChange={setLoginPass}
+   406→                    show={showLoginPass}
+   407→                    onToggle={() => setShowLoginPass((v) => !v)}
+   408→                    placeholder="كلمة مرور حسابك"
+   409→                    autoComplete="current-password"
+   410→                    onEnter={doLogin}
+   411→                  />
+   412→                  <div className="flex justify-end">
+   413→                    <button
+   414→                      onClick={() => goForgot()}
+   415→                      className="text-xs font-black text-[#0000CE] hover:underline flex items-center gap-1"
+   416→                    >
+   417→                      <KeyRound className="h-3.5 w-3.5" />
+   418→                      نسيت كلمة المرور؟
+   419→                    </button>
+   420→                  </div>
+   421→                </div>
+   422→
+   423→                {/* تنبيهات توجيهية — حساب قديم بدون كلمة مرور، أو رقم غير مسجل */}
+   424→                {loginHint === "NO_PASSWORD" && (
+   425→                  <div className="rounded-xl bg-[#FFF7E0] border border-[#F5A623]/50 p-3 space-y-2">
+   426→                    <p className="text-[11.5px] font-semibold text-[#0B1220] leading-relaxed">
+   427→                      🔐 حسابك سُجِّل سابقاً برمز التحقق وبدون كلمة مرور — اضبطها الآن برمز التحقق
+   428→                      المرسل إلى رقمك، ومن بعدها تدخل مباشرة بكلمة المرور
+   429→                    </p>
+   430→                    <Button
+   431→                      size="sm"
+   432→                      className="w-full h-9 rounded-full bg-[#0000CE] hover:bg-[#0000A3] font-black text-xs"
+   433→                      onClick={() => goForgot(true)}
+   434→                      disabled={busy}
+   435→                    >
+   436→                      {busy ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <KeyRound className="h-4 w-4 me-1" />}
+   437→                      ضبط كلمة المرور عبر رقم الهاتف
+   438→                    </Button>
+   439→                  </div>
+   440→                )}
+   441→                {loginHint === "NO_USER" && (
+   442→                  <div className="rounded-xl bg-[#EAEDFF] border border-[#0000CE]/40 p-3 space-y-2">
+   443→                    <p className="text-[11.5px] font-semibold text-[#0B1220] leading-relaxed">
+   444→                      👋 ما يوجد حساب بهذا الرقم — أنشئ حسابك الجديد باسمك ورقمك وكلمة مرورك في دقيقة
+   445→                    </p>
+   446→                    <Button
+   447→                      size="sm"
+   448→                      className="w-full h-9 rounded-full bg-[#0000CE] hover:bg-[#0000A3] font-black text-xs"
+   449→                      onClick={goRegister}
+   450→                      disabled={busy}
+   451→                    >
+   452→                      <UserPlus className="h-4 w-4 me-1" />
+   453→                      إنشاء حساب جديد
+   454→                    </Button>
+   455→                  </div>
+   456→                )}
+   457→
+   458→                <Button
+   459→                  className="w-full rounded-full bg-[#0000CE] hover:bg-[#0000A3] h-11 font-black"
+   460→                  onClick={doLogin}
+   461→                  disabled={busy}
+   462→                >
+   463→                  {busy ? <Loader2 className="h-4.5 w-4.5 animate-spin me-1.5" /> : <LogIn className="h-4.5 w-4.5 me-1.5" />}
+   464→                  تسجيل الدخول
+   465→                </Button>
+   466→
+   467→                <div className="flex items-center gap-3 pt-1">
+   468→                  <span className="h-px flex-1 bg-border" />
+   469→                  <span className="text-[10px] font-black text-muted-foreground">أو</span>
+   470→                  <span className="h-px flex-1 bg-border" />
+   471→                </div>
+   472→
+   473→                <button
+   474→                  onClick={goRegister}
+   475→                  className="w-full text-center text-sm font-black text-[#0000CE] hover:underline flex items-center justify-center gap-1.5"
+   476→                >
+   477→                  <UserPlus className="h-4 w-4" />
+   478→                  حساب جديد؟ أنشئ حسابك في يجيلك
+   479→                </button>
+   480→
+   481→                <p className="text-[11px] text-center text-muted-foreground leading-relaxed">
+   482→                  بالمتابعة أنت توافق على شروط الاستخدام وسياسة الخصوصية
+   483→                </p>
+   484→              </motion.div>
+   485→            ) : mode === "register" ? (
+   486→              /* ===== الوضع 2: إنشاء حساب — البيانات ثم الرمز ثم النوع/الانضمام ===== */
+   487→              step === "credentials" ? (
+   488→                <motion.div
+   489→                  key="reg-credentials"
+   490→                  initial={{ opacity: 0, x: 16 }}
+   491→                  animate={{ opacity: 1, x: 0 }}
+   492→                  exit={{ opacity: 0, x: -16 }}
+   493→                  transition={{ duration: 0.2 }}
+   494→                  className="space-y-3.5"
+   495→                >
+   496→                  <div>
+   497→                    <div className="flex items-center gap-2 text-sm font-black text-[#0B1220]">
+   498→                      <UserPlus className="h-4.5 w-4.5 text-[#0000CE]" />
+   499→                      إنشاء حساب جديد
+   500→                    </div>
+   501→                    <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+   502→                      بياناتك وكلمة مرورك — وثم رمز تحقق لتفعيل رقمك
+   503→                    </p>
+   504→                  </div>
+   505→
+   506→                  <div className="space-y-1.5">
+   507→                    <Label htmlFor="reg-name">الاسم</Label>
+   508→                    <div className="relative">
+   509→                      <UserRound className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+   510→                      <Input
+   511→                        id="reg-name"
+   512→                        value={name}
+   513→                        onChange={(e) => setName(e.target.value)}
+   514→                        placeholder="مثال: أحمد علي"
+   515→                        className="bg-white ps-9"
+   516→                        autoComplete="name"
+   517→                      />
+   518→                    </div>
+   519→                  </div>
+   520→
+   521→                  <PhoneField id="reg-phone" value={phone} onChange={setPhone} onEnter={registerNext} />
+   522→
+   523→                  <div className="space-y-1.5">
+   524→                    <Label htmlFor="reg-pass">كلمة المرور</Label>
+   525→                    <PasswordInput
+   526→                      id="reg-pass"
+   527→                      value={password}
+   528→                      onChange={setPassword}
+   529→                      show={showPass}
+   530→                      onToggle={() => setShowPass((v) => !v)}
+   531→                      placeholder="6 أحرف على الأقل"
+   532→                      autoComplete="new-password"
+   533→                      onEnter={registerNext}
+   534→                    />
+   535→                    <PasswordInput
+   536→                      id="reg-confirm"
+   537→                      value={confirm}
+   538→                      onChange={setConfirm}
+   539→                      show={showConfirm}
+   540→                      onToggle={() => setShowConfirm((v) => !v)}
+   541→                      placeholder="تأكيد كلمة المرور"
+   542→                      autoComplete="new-password"
+   543→                      onEnter={registerNext}
+   544→                      className="mt-2"
+   545→                    />
+   546→                    <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+   547→                      <Lock className="h-3 w-3 text-[#0000CE]" />
+   548→                      6 أحرف على الأقل — تحفظها لتدخل لاحقاً برقمك وكلمتك مباشرة بدون رمز
+   549→                    </p>
+   550→                  </div>
+   551→
+   552→                  <Button
+   553→                    className="w-full rounded-full bg-[#0000CE] hover:bg-[#0000A3] h-11 font-black"
+   554→                    onClick={registerNext}
+   555→                    disabled={busy}
+   556→                  >
+   557→                    {busy ? <Loader2 className="h-4.5 w-4.5 animate-spin me-1.5" /> : <MessageSquareText className="h-4.5 w-4.5 me-1.5" />}
+   558→                    إرسال رمز التحقق
+   559→                  </Button>
+   560→
+   561→                  <p className="text-[11px] text-center text-muted-foreground leading-relaxed">
+   562→                    إذا كان لديك حساب سابق بهذا الرقم — أدخل كلمة مرور الحساب نفسها وسيتم الدخول
+   563→                    مباشرة بعد التحقق
+   564→                  </p>
+   565→
+   566→                  <button
+   567→                    onClick={goLogin}
+   568→                    className="w-full text-center text-xs font-bold text-muted-foreground hover:text-[#0000CE] transition"
+   569→                  >
+   570→                    لديك حساب؟ رجوع لتسجيل الدخول
+   571→                  </button>
+   572→                </motion.div>
+   573→              ) : step === "code" ? (
+   574→                <motion.div
+   575→                  key="reg-code"
+   576→                  initial={{ opacity: 0, x: -16 }}
+   577→                  animate={{ opacity: 1, x: 0 }}
+   578→                  exit={{ opacity: 0, x: 16 }}
+   579→                  transition={{ duration: 0.2 }}
+   580→                  className="space-y-3.5"
+   581→                >
+   582→                  <div className="flex items-center justify-between gap-2">
+   583→                    <div className="text-sm font-black text-[#0B1220] flex items-center gap-2">
+   584→                      <ShieldCheck className="h-4.5 w-4.5 text-[#00875A]" />
+   585→                      أدخل رمز التحقق
+   586→                    </div>
+   587→                    <button
+   588→                      onClick={() => setStep("credentials")}
+   589→                      className="text-xs font-bold text-[#0000CE] flex items-center gap-1 hover:underline"
+   590→                    >
+   591→                      <Pencil className="h-3 w-3" /> تعديل البيانات
+   592→                    </button>
+   593→                  </div>
+   594→
+   595→                  <p className="text-xs text-muted-foreground">
+   596→                    أرسلنا رمزاً من 6 أرقام إلى{" "}
+   597→                    <span dir="ltr" className="font-black text-[#0B1220]">
+   598→                      {formatPhoneDisplay(phone)}
+   599→                    </span>
+   600→                    {lockRole
+   601→                      ? chosenRole === "CUSTOMER"
+   602→                        ? isNewUser
+   603→                          ? " — حساب جديد: يُنشأ بعد إدخال الرمز"
+   604→                          : " — سيتم الدخول لحسابك مباشرة"
+   605→                        : " — ثم يكتمل نموذج طلب الانضمام"
+   606→                      : isNewUser
+   607→                        ? " — حساب جديد: سنحدد نوع حسابك بعد إدخال الرمز"
+   608→                        : " — تأكيد كلمة المرور والدخول لحسابك"}
+   609→                  </p>
+   610→
+   611→                  <OtpSlots value={code} onChange={(v) => { setCode(v); setCodeError(null); }} />
+   612→
+   613→                  {codeError && (
+   614→                    <div className="rounded-xl bg-[#FFECEC] border border-[#E5484D]/50 p-3 text-[11.5px] font-semibold text-[#0B1220] leading-relaxed">
+   615→                      ⚠️ {codeError}
+   616→                    </div>
+   617→                  )}
+   618→
+   619→                  <DevCodeBox code={devCode} />
+   620→
+   621→                  <Button
+   622→                    className="w-full rounded-full bg-[#0000CE] hover:bg-[#0000A3] h-11 font-black"
+   623→                    onClick={codeStepNext}
+   624→                    disabled={busy || code.length !== 6}
+   625→                  >
+   626→                    {busy ? <Loader2 className="h-4.5 w-4.5 animate-spin me-1.5" /> : <CheckCircle2 className="h-4.5 w-4.5 me-1.5" />}
+   627→                    {codeNextLabel}
+   628→                  </Button>
+   629→
+   630→                  <ResendRow
+   631→                    resendIn={resendIn}
+   632→                    busy={busy}
+   633→                    onResend={() => sendCode("REGISTER")}
+   634→                    onEdit={() => setStep("credentials")}
+   635→                  />
+   636→                </motion.div>
+   637→              ) : step === "role" ? (
+   638→                <motion.div
+   639→                  key="reg-role"
+   640→                  initial={{ opacity: 0, x: 16 }}
+   641→                  animate={{ opacity: 1, x: 0 }}
+   642→                  exit={{ opacity: 0, x: -16 }}
+   643→                  transition={{ duration: 0.2 }}
+   644→                  className="space-y-3.5"
+   645→                >
+   646→                  <div className="text-sm font-black text-[#0B1220] flex items-center gap-2">
+   647→                    <ShieldCheck className="h-4.5 w-4.5 text-[#00875A]" />
+   648→                    شو نوع حسابك؟
+   649→                  </div>
+   650→                  <p className="text-xs text-muted-foreground leading-relaxed">
+   651→                    حدد نوع حسابك عند أول تسجيل — العميل يطلب فوراً، أما التاجر والكابتن فيقدّمون طلب
+   652→                    انضمام تراجعه إدارة التطبيق ويوافق عليه مع الشورط
+   653→                  </p>
+   654→
+   655→                  <div className="space-y-2.5">
+   656→                    {[
+   657→                      {
+   658→                        key: "CUSTOMER" as const,
+   659→                        icon: "🛍️",
+   660→                        title: "أطلب كعميل",
+   661→                        desc: "تسجيل عادي — تصفح المطاعم والمتاجر واطلب فوراً",
+   662→                      },
+   663→                      {
+   664→                        key: "MERCHANT" as const,
+   665→                        icon: "🍽️",
+   666→                        title: "صاحب مطعم أو متجر",
+   667→                        desc: "أضف متجرك ليجيلك واستقبل طلبات العملاء — تشوف طلبات متجرك فقط",
+   668→                      },
+   669→                      {
+   670→                        key: "DRIVER" as const,
+   671→                        icon: "🛵",
+   672→                        title: "كابتن توصيل",
+   673→                        desc: "سلّم الطلبات بسيارتك أو دراجتك — تشوف الطلبات المسندة إليك فقط",
+   674→                      },
+   675→                    ].map((r) => (
+   676→                      <button
+   677→                        key={r.key}
+   678→                        type="button"
+   679→                        onClick={() => setChosenRole(r.key)}
+   680→                        className={`w-full text-start rounded-2xl border p-3.5 flex items-start gap-3 transition ${
+   681→                          chosenRole === r.key
+   682→                            ? "border-[#0000CE] bg-[#EAEDFF] shadow-md"
+   683→                            : "border-border bg-white hover:border-[#00C46A]"
+   684→                        }`}
+   685→                        aria-pressed={chosenRole === r.key}
+   686→                      >
+   687→                        <span className="text-2xl leading-none mt-0.5 shrink-0">{r.icon}</span>
+   688→                        <span className="flex-1 min-w-0">
+   689→                          <span className="block font-black text-sm">{r.title}</span>
+   690→                          <span className="block text-[11px] text-muted-foreground mt-0.5 leading-relaxed">{r.desc}</span>
+   691→                        </span>
+   692→                        {chosenRole === r.key && <CheckCircle2 className="h-5 w-5 text-[#0000CE] shrink-0" />}
+   693→                      </button>
+   694→                    ))}
+   695→                  </div>
+   696→
+   697→                  <Button
+   698→                    className="w-full rounded-full bg-[#0000CE] hover:bg-[#0000A3] h-11 font-black"
+   699→                    onClick={() => (chosenRole === "CUSTOMER" ? verifyRegister() : setStep("apply"))}
+   700→                    disabled={busy}
+   701→                  >
+   702→                    {busy ? <Loader2 className="h-4.5 w-4.5 animate-spin me-1.5" /> : <CheckCircle2 className="h-4.5 w-4.5 me-1.5" />}
+   703→                    {chosenRole === "CUSTOMER" ? "تحقق وأنشئ حسابي" : "متابعة لنموذج الانضمام"}
+   704→                  </Button>
+   705→
+   706→                  <button
+   707→                    onClick={() => setStep("code")}
+   708→                    className="w-full text-center text-xs font-bold text-muted-foreground hover:text-[#0000CE] transition"
+   709→                  >
+   710→                    رجوع للرمز
+   711→                  </button>
+   712→                </motion.div>
+   713→              ) : (
+   714→                <motion.div
+   715→                  key="reg-apply"
+   716→                  initial={{ opacity: 0, x: 16 }}
+   717→                  animate={{ opacity: 1, x: 0 }}
+   718→                  exit={{ opacity: 0, x: -16 }}
+   719→                  transition={{ duration: 0.2 }}
+   720→                  className="space-y-3.5"
+   721→                >
+   722→                  <div className="text-sm font-black text-[#0B1220] flex items-center gap-2">
+   723→                    <UtensilsCrossed className="h-4.5 w-4.5 text-[#0000CE]" />
+   724→                    {chosenRole === "MERCHANT" ? "نموذج انضمام متجر / مطعم" : "نموذج انضمام كابتن توصيل"}
+   725→                  </div>
+   726→                  <JoinApplicationForm
+   727→                    type={chosenRole === "DRIVER" ? "DRIVER" : "MERCHANT"}
+   728→                    busy={busy}
+   729→                    onSubmit={(app) => verifyRegister(app)}
+   730→                    onBackType={lockRole ? () => setStep("code") : () => setStep("role")}
+   731→                  />
+   732→                </motion.div>
+   733→              )
+   734→            ) : (
+   735→              /* ===== الوضع 3: نسيت كلمة المرور — الرقم ثم الرمز + كلمة المرور الجديدة ===== */
+   736→              fStep === "phone" ? (
+   737→                <motion.div
+   738→                  key="forgot-phone"
+   739→                  initial={{ opacity: 0, x: 16 }}
+   740→                  animate={{ opacity: 1, x: 0 }}
+   741→                  exit={{ opacity: 0, x: -16 }}
+   742→                  transition={{ duration: 0.2 }}
+   743→                  className="space-y-3.5"
+   744→                >
+   745→                  <div>
+   746→                    <div className="flex items-center gap-2 text-sm font-black text-[#0B1220]">
+   747→                      <KeyRound className="h-4.5 w-4.5 text-[#0000CE]" />
+   748→                      نسيت كلمة المرور؟
+   749→                    </div>
+   750→                    <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+   751→                      لا مشكلة — أدخل رقم هاتفك وسنرسل لك رمز تحقق لتعيين كلمة مرور جديدة
+   752→                    </p>
+   753→                  </div>
+   754→
+   755→                  <PhoneField id="forgot-phone" value={phone} onChange={setPhone} onEnter={() => sendCode("RESET_PASSWORD")} />
+   756→
+   757→                  {fHint === "NO_USER" && (
+   758→                    <div className="rounded-xl bg-[#EAEDFF] border border-[#0000CE]/40 p-3 space-y-2">
+   759→                      <p className="text-[11.5px] font-semibold text-[#0B1220] leading-relaxed">
+   760→                        👋 ما يوجد حساب بهذا الرقم — أنشئ حسابك الجديد في دقيقة
+   761→                      </p>
+   762→                      <Button
+   763→                        size="sm"
+   764→                        className="w-full h-9 rounded-full bg-[#0000CE] hover:bg-[#0000A3] font-black text-xs"
+   765→                        onClick={goRegister}
+   766→                        disabled={busy}
+   767→                      >
+   768→                        <UserPlus className="h-4 w-4 me-1" />
+   769→                        إنشاء حساب جديد
+   770→                      </Button>
+   771→                    </div>
+   772→                  )}
+   773→
+   774→                  <Button
+   775→                    className="w-full rounded-full bg-[#0000CE] hover:bg-[#0000A3] h-11 font-black"
+   776→                    onClick={() => sendCode("RESET_PASSWORD")}
+   777→                    disabled={busy}
+   778→                  >
+   779→                    {busy ? <Loader2 className="h-4.5 w-4.5 animate-spin me-1.5" /> : <MessageSquareText className="h-4.5 w-4.5 me-1.5" />}
+   780→                    إرسال رمز التحقق
+   781→                  </Button>
+   782→
+   783→                  <button
+   784→                    onClick={goLogin}
+   785→                    className="w-full text-center text-xs font-bold text-muted-foreground hover:text-[#0000CE] transition"
+   786→                  >
+   787→                    رجوع لتسجيل الدخول
+   788→                  </button>
+   789→                </motion.div>
+   790→              ) : (
+   791→                <motion.div
+   792→                  key="forgot-reset"
+   793→                  initial={{ opacity: 0, x: -16 }}
+   794→                  animate={{ opacity: 1, x: 0 }}
+   795→                  exit={{ opacity: 0, x: 16 }}
+   796→                  transition={{ duration: 0.2 }}
+   797→                  className="space-y-3.5"
+   798→                >
+   799→                  <div className="flex items-center justify-between gap-2">
+   800→                    <div className="text-sm font-black text-[#0B1220] flex items-center gap-2">
+   801→                      <ShieldCheck className="h-4.5 w-4.5 text-[#00875A]" />
+   802→                      تعيين كلمة مرور جديدة
+   803→                    </div>
+   804→                    <button
+   805→                      onClick={() => setFStep("phone")}
+   806→                      className="text-xs font-bold text-[#0000CE] flex items-center gap-1 hover:underline"
+   807→                    >
+   808→                      <Pencil className="h-3 w-3" /> تعديل الرقم
+   809→                    </button>
+   810→                  </div>
+   811→
+   812→                  <p className="text-xs text-muted-foreground">
+   813→                    أرسلنا رمزاً من 6 أرقام إلى{" "}
+   814→                    <span dir="ltr" className="font-black text-[#0B1220]">
+   815→                      {formatPhoneDisplay(phone)}
+   816→                    </span>{" "}
+   817→                    — أدخله مع كلمة مرورك الجديدة
+   818→                  </p>
+   819→
+   820→                  <OtpSlots value={resetCode} onChange={(v) => { setResetCode(v); setResetError(null); }} />
+   821→
+   822→                  <DevCodeBox code={devCode} />
+   823→
+   824→                  <div className="space-y-1.5">
+   825→                    <Label htmlFor="reset-pass">كلمة المرور الجديدة</Label>
+   826→                    <PasswordInput
+   827→                      id="reset-pass"
+   828→                      value={newPass}
+   829→                      onChange={setNewPass}
+   830→                      show={showNewPass}
+   831→                      onToggle={() => setShowNewPass((v) => !v)}
+   832→                      placeholder="6 أحرف على الأقل"
+   833→                      autoComplete="new-password"
+   834→                      onEnter={submitReset}
+   835→                    />
+   836→                    <PasswordInput
+   837→                      id="reset-confirm"
+   838→                      value={newConfirm}
+   839→                      onChange={setNewConfirm}
+   840→                      show={showNewConfirm}
+   841→                      onToggle={() => setShowNewConfirm((v) => !v)}
+   842→                      placeholder="تأكيد كلمة المرور الجديدة"
+   843→                      autoComplete="new-password"
+   844→                      onEnter={submitReset}
+   845→                      className="mt-2"
+   846→                    />
+   847→                  </div>
+   848→
+   849→                  {resetError && (
+   850→                    <div className="rounded-xl bg-[#FFECEC] border border-[#E5484D]/50 p-3 text-[11.5px] font-semibold text-[#0B1220] leading-relaxed">
+   851→                      ⚠️ {resetError}
+   852→                    </div>
+   853→                  )}
+   854→
+   855→                  <Button
+   856→                    className="w-full rounded-full bg-[#0000CE] hover:bg-[#0000A3] h-11 font-black"
+   857→                    onClick={submitReset}
+   858→                    disabled={busy || resetCode.length !== 6}
+   859→                  >
+   860→                    {busy ? <Loader2 className="h-4.5 w-4.5 animate-spin me-1.5" /> : <CheckCircle2 className="h-4.5 w-4.5 me-1.5" />}
+   861→                    تعيين كلمة المرور ودخول
+   862→                  </Button>
+   863→
+   864→                  <ResendRow
+   865→                    resendIn={resendIn}
+   866→                    busy={busy}
+   867→                    onResend={() => sendCode("RESET_PASSWORD")}
+   868→                    onEdit={() => setFStep("phone")}
+   869→                  />
+   870→                </motion.div>
+   871→              )
+   872→            )}
+   873→          </AnimatePresence>
+   874→        </div>
+   875→      </motion.div>
+   876→    </div>
+   877→  );
+   878→}
+   879→
+   880→// ===== عناصر مشتركة صغيرة =====
+   881→
+   882→/** حقل رقم الهاتف العراقي — +964 مضاف تلقائياً وعرض بخط LTR */
+   883→function PhoneField({
+   884→  id,
+   885→  value,
+   886→  onChange,
+   887→  onEnter,
+   888→  label = "رقم الهاتف العراقي",
+   889→}: {
+   890→  id: string;
+   891→  value: string;
+   892→  onChange: (v: string) => void;
+   893→  onEnter?: () => void;
+   894→  label?: string;
+   895→}) {
+   896→  return (
+   897→    <div className="space-y-1.5">
+   898→      <Label htmlFor={id}>{label}</Label>
+   899→      <div className="flex" dir="ltr">
+   900→        <span className="inline-flex items-center justify-center rounded-l-xl border border-r-0 border-input bg-[#EAEDFF] px-3 text-sm font-black text-[#0B1220] select-none">
+   901→          {IQ_DIAL_CODE}
+   902→        </span>
+   903→        <Input
+   904→          id={id}
+   905→          value={value}
+   906→          onChange={(e) => onChange(e.target.value)}
+   907→          placeholder="0770 123 4567"
+   908→          dir="ltr"
+   909→          inputMode="tel"
+   910→          autoComplete="tel"
+   911→          className="rounded-l-none rounded-r-xl text-left bg-white"
+   912→          onKeyDown={(e) => e.key === "Enter" && onEnter?.()}
+   913→        />
+   914→      </div>
+   915→      <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+   916→        <CheckCircle2 className="h-3 w-3 text-[#00875A]" />
+   917→        اكتب رقمك بدون مفتاح الدولة — يُضاف {IQ_DIAL_CODE} تلقائياً
+   918→      </p>
+   919→    </div>
+   920→  );
+   921→}
+   922→
+   923→/** حقل كلمة مرور مع زر إظهار/إخفاء */
+   924→function PasswordInput({
+   925→  id,
+   926→  value,
+   927→  onChange,
+   928→  show,
+   929→  onToggle,
+   930→  placeholder,
+   931→  autoComplete,
+   932→  onEnter,
+   933→  className,
+   934→}: {
+   935→  id: string;
+   936→  value: string;
+   937→  onChange: (v: string) => void;
+   938→  show: boolean;
+   939→  onToggle: () => void;
+   940→  placeholder?: string;
+   941→  autoComplete?: string;
+   942→  onEnter?: () => void;
+   943→  className?: string;
+   944→}) {
+   945→  return (
+   946→    <div className={`relative ${className || ""}`}>
+   947→      <Input
+   948→        id={id}
+   949→        type={show ? "text" : "password"}
+   950→        value={value}
+   951→        onChange={(e) => onChange(e.target.value)}
+   952→        placeholder={placeholder}
+   953→        dir="ltr"
+   954→        autoComplete={autoComplete}
+   955→        className="bg-white pe-11 text-left"
+   956→        onKeyDown={(e) => e.key === "Enter" && onEnter?.()}
+   957→      />
+   958→      <button
+   959→        type="button"
+   960→        onClick={onToggle}
+   961→        tabIndex={-1}
+   962→        aria-label={show ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
+   963→        className="absolute end-2 top-1/2 -translate-y-1/2 h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-[#0000CE] hover:bg-[#EAEDFF] transition"
+   964→      >
+   965→        {show ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
+   966→      </button>
+   967→    </div>
+   968→  );
+   969→}
+   970→
+   971→/** خانات إدخال رمز التحقق — 6 أرقام */
+   972→function OtpSlots({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+   973→  return (
+   974→    <div className="flex justify-center py-1" dir="ltr">
+   975→      <InputOTP maxLength={6} value={value} onChange={onChange}>
+   976→        <InputOTPGroup>
+   977→          {[0, 1, 2, 3, 4, 5].map((i) => (
+   978→            <InputOTPSlot
+   979→              key={i}
+   980→              index={i}
+   981→              className="h-12 w-11 text-lg font-black border-[#E5E8EF] first:rounded-r-xl last:rounded-l-xl data-[active=true]:border-[#0000CE] data-[active=true]:ring-[#0000CE]/25"
+   982→            />
+   983→          ))}
+   984→        </InputOTPGroup>
+   985→      </InputOTP>
+   986→    </div>
+   987→  );
+   988→}
+   989→
+   990→/** بطاقة كود التجربة — تُحذف عند ربط مزود SMS حقيقي */
+   991→function DevCodeBox({ code }: { code: string | null }) {
+   992→  if (!code) return null;
+   993→  return (
+   994→    <div className="rounded-xl bg-[#CFFFE2] border border-[#00C46A]/50 p-3 text-[11px] text-center text-[#0B1220]/85 leading-relaxed">
+   995→      <span className="font-black">🔑 النسخة التجريبية — رمز التحقق: </span>
+   996→      <span dir="ltr" className="font-black text-base text-[#0000CE] tracking-widest">
+   997→        {code}
+   998→      </span>
+   999→      <br />
+  1000→      عند ربط خدمة الرسائل القصيرة سيصل الرمز إلى هاتفك كرسالة نصية
+  1001→    </div>
+  1002→  );
+  1003→}
+  1004→
+  1005→/** صف «لم يصلك الرمز؟» — عداد إعادة الإرسال + تعديل الرقم */
+  1006→function ResendRow({
+  1007→  resendIn,
+  1008→  busy,
+  1009→  onResend,
+  1010→  onEdit,
+  1011→}: {
+  1012→  resendIn: number;
+  1013→  busy: boolean;
+  1014→  onResend: () => void;
+  1015→  onEdit: () => void;
+  1016→}) {
+  1017→  return (
+  1018→    <div className="text-center text-xs text-muted-foreground space-y-1.5">
+  1019→      <div>
+  1020→        لم يصلك الرمز؟{" "}
+  1021→        {resendIn > 0 ? (
+  1022→          <span className="font-bold">إعادة الإرسال بعد {resendIn} ثانية</span>
+  1023→        ) : (
+  1024→          <button onClick={onResend} disabled={busy} className="font-black text-[#0000CE] hover:underline">
+  1025→            إعادة إرسال الرمز
+  1026→          </button>
+  1027→        )}
+  1028→      </div>
+  1029→      <button onClick={onEdit} className="font-bold text-muted-foreground hover:text-[#0000CE] transition flex items-center gap-1 justify-center">
+  1030→        <Pencil className="h-3 w-3" /> تعديل الرقم
+  1031→      </button>
+  1032→    </div>
+  1033→  );
+  1034→}
+  1035→
